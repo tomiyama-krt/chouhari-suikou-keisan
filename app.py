@@ -92,7 +92,7 @@ def render_tou():
                 "測点名", value=row.get("name") or f"No.{idx + 1}", key=f"tou_name_{idx}"
             )
             row["reading"] = c2.number_input(
-                "貫天端 読値 (m)", value=row.get("reading"), step=0.001, format="%.3f", key=f"tou_reading_{idx}"
+                "仮天端 読値 (m)", value=row.get("reading"), step=0.001, format="%.3f", key=f"tou_reading_{idx}"
             )
             row["design"] = c3.number_input(
                 "設計 計画高 (m)", value=row.get("design"), step=0.001, format="%.3f", key=f"tou_design_{idx}"
@@ -104,9 +104,12 @@ def render_tou():
             drop_mm = ((board_elev - design) * 1000) if (board_elev is not None and design is not None) else None
 
             r1, r2, r3 = st.columns(3)
-            r1.metric("仮天端標高", fmt(board_elev) if board_elev is not None else "–")
-            r2.metric("読むべき値", fmt(target_reading) if target_reading is not None else "–")
-            r3.metric("下がり量", f"{fmt_signed(drop_mm, 0)} mm" if drop_mm is not None else "–")
+            r1.caption("仮天端標高")
+            r1.markdown(f"##### {fmt(board_elev) if board_elev is not None else '–'}")
+            r2.caption("読むべき値")
+            r2.markdown(f"##### {fmt(target_reading) if target_reading is not None else '–'}")
+            r3.caption("下がり量")
+            r3.markdown(f"##### {f'{fmt_signed(drop_mm, 0)} mm' if drop_mm is not None else '–'}")
 
     if delete_idx is not None:
         st.session_state.tou_rows.pop(delete_idx)
@@ -129,35 +132,32 @@ def render_tou():
 
 
 # ============================================================
-# 雨水排水勾配
+# 雨水排水勾配 (分岐・合流に対応したネットワーク構造)
 # ============================================================
-def sui_sample_rows():
+def sui_next_id(items):
+    return max((it["id"] for it in items), default=0) + 1
+
+
+def sui_sample_nodes():
     return [
-        {"name": "No.1桝", "dist": None, "reading": 1.858, "invert": None, "drop": 20.0,
+        {"id": 1, "name": "No.1桝", "reading": 1.858, "out": None,
          "pipe_type": "VU管", "nominal_size": 200, "outer_diameter": None},
-        {"name": "No.2桝", "dist": 6.0, "reading": 1.998, "invert": None, "drop": 20.0,
+        {"id": 2, "name": "No.2桝", "reading": 1.998, "out": None,
          "pipe_type": "VU管", "nominal_size": 200, "outer_diameter": None},
-        {"name": "No.3桝", "dist": 8.0, "reading": None, "invert": 11.556, "drop": None,
+        {"id": 3, "name": "No.3桝", "reading": 1.978, "out": None,
+         "pipe_type": "VU管", "nominal_size": 200, "outer_diameter": None},
+        {"id": 4, "name": "No.4桝", "reading": None, "out": 11.656,
          "pipe_type": "VU管", "nominal_size": 200, "outer_diameter": None},
     ]
 
 
-def sui_rows_to_df(rows):
-    return pd.DataFrame(
-        [
-            {
-                "桝名": r.get("name"),
-                "桝間距離(m)": r.get("dist"),
-                "読値": r.get("reading"),
-                "IN(流入管底高)": r.get("invert"),
-                "落差(mm)": r.get("drop"),
-                "管種": r.get("pipe_type"),
-                "呼び径(mm)": r.get("nominal_size"),
-                "外径入力(mm)": r.get("outer_diameter"),
-            }
-            for r in rows
-        ]
-    )
+def sui_sample_edges():
+    return [
+        {"id": 1, "from_id": 1, "to_id": 2, "dist": 6.0, "reading": None, "invert": None},
+        {"id": 2, "from_id": 1, "to_id": 3, "dist": 5.0, "reading": None, "invert": None},
+        {"id": 3, "from_id": 2, "to_id": 4, "dist": 4.0, "reading": None, "invert": None},
+        {"id": 4, "from_id": 3, "to_id": 4, "dist": 4.0, "reading": None, "invert": None},
+    ]
 
 
 def outer_diameter_mm(pipe_type, nominal_size, outer_diameter):
@@ -169,53 +169,41 @@ def outer_diameter_mm(pipe_type, nominal_size, outer_diameter):
     return num(outer_diameter)
 
 
-def compute_sui(df, ih, unit):
-    prev_out = None
-    IN_list, OUT_list, slope_list, per_m_list, crown_list, od_list, start_invert_list, dist_list = (
-        [], [], [], [], [], [], [], []
-    )
-    for i, row in df.iterrows():
-        dist = num(row.get("桝間距離(m)"))
-        reading = num(row.get("読値"))
-        direct_invert = num(row.get("IN(流入管底高)"))
-        drop = num(row.get("落差(mm)"))
-        drop_m = (drop / 1000) if drop is not None else 0.0
+def compute_network(nodes, edges, ih, unit):
+    node_out, node_od = {}, {}
+    for n in nodes:
+        reading = num(n.get("reading"))
+        out_direct = num(n.get("out"))
+        out = (ih - reading) if (reading is not None and ih is not None) else out_direct
+        node_out[n["id"]] = out
+        node_od[n["id"]] = outer_diameter_mm(n.get("pipe_type"), n.get("nominal_size"), n.get("outer_diameter"))
 
-        IN = None
+    edge_results = []
+    for e in edges:
+        upstream_out = node_out.get(e.get("from_id"))
+        downstream_out = node_out.get(e.get("to_id"))
+        reading = num(e.get("reading"))
+        invert_direct = num(e.get("invert"))
         if reading is not None and ih is not None:
             IN = ih - reading
-        elif direct_invert is not None:
-            IN = direct_invert
+        elif invert_direct is not None:
+            IN = invert_direct
+        else:
+            IN = downstream_out  # 未指定なら下流桝のOUTをそのまま流入管底高として扱う(単純接続の場合)
 
-        per_m, slope_val = None, None
-        if i > 0 and IN is not None and prev_out is not None and dist is not None and dist > 0:
-            per_m = (prev_out - IN) / dist
-            slope_val = per_m
+        dist = num(e.get("dist"))
+        per_m = None
+        if upstream_out is not None and IN is not None and dist is not None and dist > 0:
+            per_m = (upstream_out - IN) / dist
 
-        OUT = (IN - drop_m) if IN is not None else None
-        od = outer_diameter_mm(row.get("管種"), row.get("呼び径(mm)"), row.get("外径入力(mm)"))
-        crown = (OUT + od / 1000) if (OUT is not None and od is not None) else None
+        local_drop_mm = ((downstream_out - IN) * 1000) if (downstream_out is not None and IN is not None) else None
 
-        IN_list.append(IN)
-        OUT_list.append(OUT)
-        slope_list.append(slope_val)
-        per_m_list.append(per_m if (dist is not None and dist > 0) else None)
-        crown_list.append(crown)
-        od_list.append(od)
-        start_invert_list.append(prev_out)
-        dist_list.append(dist)
-        prev_out = OUT
+        edge_results.append({
+            "edge": e, "in": IN, "per_m": per_m, "dist": dist,
+            "upstream_out": upstream_out, "local_drop_mm": local_drop_mm,
+        })
 
-    out = df.copy()
-    out["IN計算"] = IN_list
-    out["OUT"] = OUT_list
-    out["勾配perM"] = slope_list
-    out["区間perM"] = per_m_list
-    out["管天端高OUT"] = crown_list
-    out["外径mm"] = od_list
-    out["区間起点OUT"] = start_invert_list
-    out["距離"] = dist_list
-    return out
+    return node_out, node_od, edge_results
 
 
 def render_sui():
@@ -241,131 +229,184 @@ def render_sui():
     show_crown = st.toggle("管天端高を表示する", value=st.session_state.get("sui_show_crown", True), key="sui_show_crown")
     st.caption("VU管・VP管の外径は一般的な参考値です(同呼び径では共通の外径として扱っています)。実際の外径は必ずメーカーカタログ・仕様書で確認してください。")
 
-    st.subheader("② 桝リスト")
-    if "sui_rows" not in st.session_state:
-        st.session_state.sui_rows = sui_sample_rows()
+    if "sui_nodes" not in st.session_state:
+        st.session_state.sui_nodes = sui_sample_nodes()
+    if "sui_edges" not in st.session_state:
+        st.session_state.sui_edges = sui_sample_edges()
 
     pipe_options = ["VU管", "VP管", "その他"]
     size_options = list(PVC_OUTER_DIAMETER.keys())
 
-    delete_idx = None
-    for idx, row in enumerate(st.session_state.sui_rows):
-        is_first = idx == 0
+    # ===== 桝リスト =====
+    st.subheader("② 桝リスト")
+    delete_node_id = None
+    for node in st.session_state.sui_nodes:
+        nid = node["id"]
         with st.container(border=True):
             top1, top2 = st.columns([4, 1])
-            top1.markdown(f"**桝 {idx + 1}**" + ("(起点)" if is_first else ""))
-            if not is_first and top2.button("削除", key=f"sui_del_{idx}", use_container_width=True):
-                delete_idx = idx
+            top1.markdown(f"**{node.get('name') or f'桝{nid}'}**")
+            if top2.button("削除", key=f"sui_node_del_{nid}", use_container_width=True):
+                delete_node_id = nid
 
-            c1, c2 = st.columns(2)
-            row["name"] = c1.text_input(
-                "桝名", value=row.get("name") or f"No.{idx + 1}桝", key=f"sui_name_{idx}"
+            c1, c2, c3 = st.columns(3)
+            node["name"] = c1.text_input(
+                "桝名", value=node.get("name") or f"桝{nid}", key=f"sui_node_name_{nid}"
             )
-            if is_first:
-                row["dist"] = None
-                c2.text_input("桝間距離(m)", value="起点", disabled=True, key=f"sui_dist_disp_{idx}")
-            else:
-                row["dist"] = c2.number_input(
-                    "桝間距離(m)", value=row.get("dist"), step=0.1, format="%.1f", key=f"sui_dist_{idx}"
-                )
-
-            c3, c4, c5 = st.columns(3)
-            row["reading"] = c3.number_input(
-                "読値 (m)", value=row.get("reading"), step=0.001, format="%.3f", key=f"sui_reading_{idx}"
+            node["reading"] = c2.number_input(
+                "読値 (m)", value=node.get("reading"), step=0.001, format="%.3f", key=f"sui_node_reading_{nid}"
             )
-            row["invert"] = c4.number_input(
-                "IN 流入管底高 (m)", value=row.get("invert"), step=0.001, format="%.3f", key=f"sui_invert_{idx}"
-            )
-            row["drop"] = c5.number_input(
-                "落差 (mm)", value=row.get("drop"), step=1.0, format="%.0f", key=f"sui_drop_{idx}"
+            node["out"] = c3.number_input(
+                "OUT 直接入力 (m)", value=node.get("out"), step=0.001, format="%.3f", key=f"sui_node_out_{nid}"
             )
 
-            c6, c7 = st.columns(2)
-            current_pipe = row.get("pipe_type") or "VU管"
-            row["pipe_type"] = c6.selectbox(
-                "管種", pipe_options,
+            c4, c5 = st.columns(2)
+            current_pipe = node.get("pipe_type") or "VU管"
+            node["pipe_type"] = c4.selectbox(
+                "管種(下流方向)", pipe_options,
                 index=pipe_options.index(current_pipe) if current_pipe in pipe_options else 0,
-                key=f"sui_pipe_{idx}",
+                key=f"sui_node_pipe_{nid}",
             )
-            if row["pipe_type"] in ("VU管", "VP管"):
-                current_size = row.get("nominal_size")
-                row["nominal_size"] = c7.selectbox(
+            if node["pipe_type"] in ("VU管", "VP管"):
+                current_size = node.get("nominal_size")
+                node["nominal_size"] = c5.selectbox(
                     "呼び径(mm)", size_options,
                     index=size_options.index(current_size) if current_size in size_options else 0,
-                    key=f"sui_size_{idx}",
+                    key=f"sui_node_size_{nid}",
                 )
             else:
-                row["outer_diameter"] = c7.number_input(
-                    "外径入力 (mm)", value=row.get("outer_diameter"), step=1.0, format="%.0f", key=f"sui_od_{idx}"
+                node["outer_diameter"] = c5.number_input(
+                    "外径入力(mm)", value=node.get("outer_diameter"), step=1.0, format="%.0f", key=f"sui_node_od_{nid}"
                 )
 
-    if delete_idx is not None:
-        st.session_state.sui_rows.pop(delete_idx)
+    if delete_node_id is not None:
+        st.session_state.sui_nodes = [n for n in st.session_state.sui_nodes if n["id"] != delete_node_id]
+        st.session_state.sui_edges = [
+            e for e in st.session_state.sui_edges
+            if e["from_id"] != delete_node_id and e["to_id"] != delete_node_id
+        ]
         st.rerun()
 
-    if st.button("＋ 桝を追加", key="sui_add_btn"):
-        n = len(st.session_state.sui_rows) + 1
-        st.session_state.sui_rows.append({
-            "name": f"No.{n}桝", "dist": None, "reading": None, "invert": None,
-            "drop": None, "pipe_type": "VU管", "nominal_size": None, "outer_diameter": None,
+    if st.button("＋ 桝を追加", key="sui_node_add_btn"):
+        new_id = sui_next_id(st.session_state.sui_nodes)
+        st.session_state.sui_nodes.append({
+            "id": new_id, "name": f"桝{new_id}", "reading": None, "out": None,
+            "pipe_type": "VU管", "nominal_size": None, "outer_diameter": None,
         })
         st.rerun()
 
-    sui_df = sui_rows_to_df(st.session_state.sui_rows)
-    calc = compute_sui(sui_df, ih, unit_key)
+    st.caption("読値を入れるとその桝のOUT(流出管底高)を自動計算します(読値が優先、空欄ならOUT直接入力を使用)。")
 
-    display_cols = ["桝名", "桝間距離(m)", "読値", "IN(流入管底高)", "落差(mm)", "OUT"]
-    if show_crown:
-        display_cols += ["管種", "呼び径(mm)", "管天端高OUT"]
-    display_cols += ["勾配perM"]
+    # ===== 区間リスト =====
+    st.subheader("③ 区間 (上流桝 → 下流桝)")
+    node_options = [n["id"] for n in st.session_state.sui_nodes]
+    node_name_by_id = {n["id"]: (n.get("name") or f"桝{n['id']}") for n in st.session_state.sui_nodes}
 
-    display = calc[display_cols].copy()
-    for col in ["桝間距離(m)", "読値", "IN(流入管底高)", "OUT", "管天端高OUT"]:
-        if col in display.columns:
-            display[col] = calc[col].map(lambda v: fmt(v) if pd.notna(v) else "–")
-    if "落差(mm)" in display.columns:
-        display["落差(mm)"] = calc["落差(mm)"].map(lambda v: fmt(v, 0) if pd.notna(v) else "–")
-    display["勾配perM"] = calc["勾配perM"].map(lambda v: fmt_slope(v, unit_key))
-    display = display.rename(columns={"OUT": "OUT 流出管底高", "管天端高OUT": "管天端高(OUT)", "勾配perM": "勾配"})
-    st.dataframe(display, use_container_width=True, hide_index=True)
-
-    # 集計
-    valid = calc.dropna(subset=["距離"])
-    total_len = valid["距離"].sum() if len(valid) else None
-    first_out = calc["OUT"].iloc[0] if len(calc) else None
-    last_valid_in = calc["IN計算"].dropna()
-    last_in = last_valid_in.iloc[-1] if len(last_valid_in) else None
-
-    m1, m2, m3 = st.columns(3)
-    m1.metric("総延長", f"{total_len:.1f} m" if total_len else "–")
-    if first_out is not None and last_in is not None and total_len:
-        total_drop = last_in - first_out
-        m2.metric("総高低差", f"{fmt_signed(total_drop * 1000, 0)} mm")
-        avg_per_m = -total_drop / total_len
-        m3.metric("平均勾配", fmt_slope(avg_per_m, unit_key))
+    if len(node_options) < 2:
+        st.info("区間を追加するには桝が2つ以上必要です。")
     else:
-        m2.metric("総高低差", "–")
-        m3.metric("平均勾配", "–")
+        delete_edge_id = None
+        for edge in st.session_state.sui_edges:
+            eid = edge["id"]
+            with st.container(border=True):
+                top1, top2 = st.columns([4, 1])
+                from_label = node_name_by_id.get(edge.get("from_id"), "?")
+                to_label = node_name_by_id.get(edge.get("to_id"), "?")
+                top1.markdown(f"**{from_label} → {to_label}**")
+                if top2.button("削除", key=f"sui_edge_del_{eid}", use_container_width=True):
+                    delete_edge_id = eid
 
-    st.subheader("③ 区間内の中間管底高")
+                c1, c2, c3 = st.columns(3)
+                cur_from = edge.get("from_id") if edge.get("from_id") in node_options else node_options[0]
+                edge["from_id"] = c1.selectbox(
+                    "上流桝", node_options, index=node_options.index(cur_from),
+                    format_func=lambda i: node_name_by_id.get(i, "?"), key=f"sui_edge_from_{eid}",
+                )
+                cur_to = edge.get("to_id") if edge.get("to_id") in node_options else node_options[0]
+                edge["to_id"] = c2.selectbox(
+                    "下流桝", node_options, index=node_options.index(cur_to),
+                    format_func=lambda i: node_name_by_id.get(i, "?"), key=f"sui_edge_to_{eid}",
+                )
+                edge["dist"] = c3.number_input(
+                    "距離(m)", value=edge.get("dist"), step=0.1, format="%.1f", key=f"sui_edge_dist_{eid}"
+                )
+
+                c4, c5 = st.columns(2)
+                edge["reading"] = c4.number_input(
+                    "読値(m・任意)", value=edge.get("reading"), step=0.001, format="%.3f", key=f"sui_edge_reading_{eid}"
+                )
+                edge["invert"] = c5.number_input(
+                    "IN 直接入力(m・任意)", value=edge.get("invert"), step=0.001, format="%.3f", key=f"sui_edge_invert_{eid}"
+                )
+
+        if delete_edge_id is not None:
+            st.session_state.sui_edges = [e for e in st.session_state.sui_edges if e["id"] != delete_edge_id]
+            st.rerun()
+
+        if st.button("＋ 区間を追加", key="sui_edge_add_btn"):
+            new_id = sui_next_id(st.session_state.sui_edges)
+            st.session_state.sui_edges.append({
+                "id": new_id, "from_id": node_options[0], "to_id": node_options[-1],
+                "dist": None, "reading": None, "invert": None,
+            })
+            st.rerun()
+
+    st.caption(
+        "区間の「読値」「IN直接入力」を両方空欄にすると、下流桝のOUTをそのままINとして扱います"
+        "(単純な1本つなぎならこれで十分です)。合流点のように複数の区間が同じ下流桝に集まる場合は、"
+        "区間ごとに読値やINを入れて個別に管理できます。"
+    )
+
+    node_out, node_od, edge_results = compute_network(
+        st.session_state.sui_nodes, st.session_state.sui_edges, ih, unit_key
+    )
+
+    # ===== 桝の計算結果 =====
+    st.subheader("④ 桝の計算結果")
+    node_rows = []
+    for n in st.session_state.sui_nodes:
+        out = node_out.get(n["id"])
+        od = node_od.get(n["id"])
+        crown = (out + od / 1000) if (out is not None and od is not None) else None
+        row = {"桝名": n.get("name"), "OUT 流出管底高": fmt(out) if out is not None else "–"}
+        if show_crown:
+            row["管天端高(OUT)"] = fmt(crown) if crown is not None else "–"
+        node_rows.append(row)
+    st.dataframe(pd.DataFrame(node_rows), use_container_width=True, hide_index=True)
+
+    # ===== 区間の計算結果 =====
+    st.subheader("⑤ 区間の計算結果")
+    edge_rows = []
+    for r in edge_results:
+        e = r["edge"]
+        from_label = node_name_by_id.get(e.get("from_id"), "?")
+        to_label = node_name_by_id.get(e.get("to_id"), "?")
+        edge_rows.append({
+            "区間": f"{from_label} → {to_label}",
+            "距離(m)": fmt(r["dist"], 1) if r["dist"] is not None else "–",
+            "IN(下流桝への流入管底高)": fmt(r["in"]) if r["in"] is not None else "–",
+            "勾配": fmt_slope(r["per_m"], unit_key),
+            "桝内落差(mm)": fmt_signed(r["local_drop_mm"], 0) if r["local_drop_mm"] is not None else "–",
+        })
+    st.dataframe(pd.DataFrame(edge_rows), use_container_width=True, hide_index=True)
+
+    # ===== 区間内の中間管底高 =====
+    st.subheader("⑥ 区間内の中間管底高")
     interval = st.number_input(
         "表示間隔 (m)", value=st.session_state.get("sui_interval", 2.0),
         step=0.1, format="%.1f", min_value=0.1, key="sui_interval",
     )
 
+    any_shown = False
     if interval is not None and interval > 0:
-        rows_data = sui_df.reset_index(drop=True)
-        any_shown = False
-        for i in range(1, len(calc)):
-            per_m = calc["区間perM"].iloc[i]
-            start_invert = calc["区間起点OUT"].iloc[i]
-            dist = calc["距離"].iloc[i]
-            if per_m is None or start_invert is None or dist is None or dist <= 0:
+        for r in edge_results:
+            e = r["edge"]
+            per_m, dist, upstream_out = r["per_m"], r["dist"], r["upstream_out"]
+            if per_m is None or dist is None or dist <= 0 or upstream_out is None:
                 continue
             any_shown = True
-            from_name = rows_data["桝名"].iloc[i - 1] or f"No.{i}"
-            to_name = rows_data["桝名"].iloc[i] or f"No.{i + 1}"
-            seg_od = calc["外径mm"].iloc[i - 1]
+            from_label = node_name_by_id.get(e.get("from_id"), "?")
+            to_label = node_name_by_id.get(e.get("to_id"), "?")
+            seg_od = node_od.get(e.get("from_id"))
 
             points = []
             x = 0.0
@@ -376,7 +417,7 @@ def render_sui():
 
             sub_rows = []
             for d in points:
-                inv = start_invert - per_m * d
+                inv = upstream_out - per_m * d
                 reading_val = (ih - inv) if ih is not None else None
                 row = {"起点からの距離": fmt(d, 1), "管底高": fmt(inv), "読み値": fmt(reading_val) if reading_val is not None else "–"}
                 if show_crown:
@@ -384,22 +425,15 @@ def render_sui():
                     row["管天端高"] = fmt(crown) if crown is not None else "–"
                 sub_rows.append(row)
 
-            st.markdown(f"**{from_name} → {to_name}** ({fmt_slope(per_m, unit_key)})")
+            st.markdown(f"**{from_label} → {to_label}** ({fmt_slope(per_m, unit_key)})")
             st.dataframe(pd.DataFrame(sub_rows), use_container_width=True, hide_index=True)
 
-        if not any_shown:
-            st.caption("桝の管底高・距離がそろった区間から、中間管底高が表示されます。")
-    else:
-        st.caption("表示間隔(m)を入力してください。")
-
-    st.caption(
-        "各桝で「読値」「IN直接入力」のどちらかを入れれば、区間の勾配・OUTが自動計算されます(読値を優先)。"
-        "「落差」は桝内でのIN→OUTの段差(mm、通常0以上)で、流出管底高 OUT = IN − 落差です。"
-        "次の区間の勾配は前の桝のOUTを基準に計算します。"
-    )
+    if not any_shown:
+        st.caption("上流桝のOUT・距離・INがそろった区間から、中間管底高が表示されます。")
 
     if st.button("サンプルを読込", key="sui_sample_btn"):
-        st.session_state.sui_rows = sui_sample_rows()
+        st.session_state.sui_nodes = sui_sample_nodes()
+        st.session_state.sui_edges = sui_sample_edges()
         st.rerun()
 
 
