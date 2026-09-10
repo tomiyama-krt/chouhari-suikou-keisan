@@ -99,6 +99,12 @@ def render_tou():
     if "tou_df" not in st.session_state:
         st.session_state.tou_df = tou_sample_df()
 
+    if st.button("＋ 測点を追加", key="tou_add_btn"):
+        n = len(st.session_state.tou_df) + 1
+        new_row = pd.DataFrame([{"測点名": f"No.{n}", "貫天端読値": None, "設計計画高": None}])
+        st.session_state.tou_df = pd.concat([st.session_state.tou_df, new_row], ignore_index=True)
+        st.rerun()
+
     edited = st.data_editor(
         st.session_state.tou_df,
         num_rows="dynamic",
@@ -110,7 +116,14 @@ def render_tou():
         },
         key="tou_editor",
     )
-    st.session_state.tou_df = edited[["測点名", "貫天端読値", "設計計画高"]]
+    new_tou_df = edited[["測点名", "貫天端読値", "設計計画高"]].copy()
+    new_tou_df["貫天端読値"] = pd.to_numeric(new_tou_df["貫天端読値"], errors="coerce")
+    new_tou_df["設計計画高"] = pd.to_numeric(new_tou_df["設計計画高"], errors="coerce")
+    for i in new_tou_df.index:
+        name = new_tou_df.at[i, "測点名"]
+        if name is None or (isinstance(name, float) and pd.isna(name)) or str(name).strip() == "":
+            new_tou_df.at[i, "測点名"] = f"No.{i + 1}"
+    st.session_state.tou_df = new_tou_df
 
     view = compute_tou(st.session_state.tou_df, ih)
     display = view[["測点名", "貫天端読値", "仮天端標高", "設計計画高", "読むべき値", "下がり量(mm)"]].copy()
@@ -233,15 +246,17 @@ def render_sui():
 
     input_cols = ["桝名", "桝間距離(m)", "読値", "IN(流入管底高)", "落差(mm)", "管種", "呼び径(mm)", "外径入力(mm)"]
 
-    # 読値が入っている行はIN列を自動計算値で上書きして表示する(直接編集も可能)
-    working = st.session_state.sui_df.copy()
-    calc_preview = compute_sui(working, ih, unit_key)
-    for i in working.index:
-        if num(working.at[i, "読値"]) is not None and calc_preview.at[i, "IN計算"] is not None:
-            working.at[i, "IN(流入管底高)"] = calc_preview.at[i, "IN計算"]
+    if st.button("＋ 桝を追加", key="sui_add_btn"):
+        n = len(st.session_state.sui_df) + 1
+        new_row = pd.DataFrame([{
+            "桝名": f"No.{n}桝", "桝間距離(m)": None, "読値": None, "IN(流入管底高)": None,
+            "落差(mm)": None, "管種": "VU管", "呼び径(mm)": None, "外径入力(mm)": None,
+        }])
+        st.session_state.sui_df = pd.concat([st.session_state.sui_df, new_row], ignore_index=True)
+        st.rerun()
 
     edited = st.data_editor(
-        working[input_cols],
+        st.session_state.sui_df[input_cols],
         num_rows="dynamic",
         use_container_width=True,
         column_config={
@@ -256,7 +271,14 @@ def render_sui():
         },
         key="sui_editor",
     )
-    st.session_state.sui_df = edited[input_cols]
+    new_sui_df = edited[input_cols].copy()
+    for col in ["桝間距離(m)", "読値", "IN(流入管底高)", "落差(mm)", "外径入力(mm)"]:
+        new_sui_df[col] = pd.to_numeric(new_sui_df[col], errors="coerce")
+    for i in new_sui_df.index:
+        name = new_sui_df.at[i, "桝名"]
+        if name is None or (isinstance(name, float) and pd.isna(name)) or str(name).strip() == "":
+            new_sui_df.at[i, "桝名"] = f"No.{i + 1}桝"
+    st.session_state.sui_df = new_sui_df
 
     calc = compute_sui(st.session_state.sui_df, ih, unit_key)
 
