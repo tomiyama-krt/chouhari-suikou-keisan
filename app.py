@@ -50,31 +50,11 @@ def fmt_slope(per_m, unit):
 # ============================================================
 # 丁張り計算
 # ============================================================
-def tou_sample_df():
-    return pd.DataFrame(
-        [
-            {"測点名": "No.1", "貫天端読値": 0.856, "設計計画高": 12.700},
-            {"測点名": "No.2", "貫天端読値": 0.640, "設計計画高": 13.000},
-        ]
-    )
-
-
-def compute_tou(df, ih):
-    board_elev, target_reading, drop_mm = [], [], []
-    for _, row in df.iterrows():
-        reading = num(row.get("貫天端読値"))
-        design = num(row.get("設計計画高"))
-        be = (ih - reading) if (ih is not None and reading is not None) else None
-        tr = (ih - design) if (ih is not None and design is not None) else None
-        dr = ((be - design) * 1000) if (be is not None and design is not None) else None
-        board_elev.append(be)
-        target_reading.append(tr)
-        drop_mm.append(dr)
-    out = df.copy()
-    out["仮天端標高"] = board_elev
-    out["読むべき値"] = target_reading
-    out["下がり量(mm)"] = drop_mm
-    return out
+def tou_sample_rows():
+    return [
+        {"name": "No.1", "reading": 0.856, "design": 12.700},
+        {"name": "No.2", "reading": 0.640, "design": 13.000},
+    ]
 
 
 def render_tou():
@@ -96,41 +76,46 @@ def render_tou():
     st.metric("器械高 IH", fmt(ih) if ih is not None else "–")
 
     st.subheader("② 測点 (貫板の下がり量)")
-    if "tou_df" not in st.session_state:
-        st.session_state.tou_df = tou_sample_df()
+    if "tou_rows" not in st.session_state:
+        st.session_state.tou_rows = tou_sample_rows()
 
-    if st.button("＋ 測点を追加", key="tou_add_btn"):
-        n = len(st.session_state.tou_df) + 1
-        new_row = pd.DataFrame([{"測点名": f"No.{n}", "貫天端読値": None, "設計計画高": None}])
-        st.session_state.tou_df = pd.concat([st.session_state.tou_df, new_row], ignore_index=True)
+    delete_idx = None
+    for idx, row in enumerate(st.session_state.tou_rows):
+        with st.container(border=True):
+            top1, top2 = st.columns([4, 1])
+            top1.markdown(f"**測点 {idx + 1}**")
+            if top2.button("削除", key=f"tou_del_{idx}", use_container_width=True):
+                delete_idx = idx
+
+            c1, c2, c3 = st.columns(3)
+            row["name"] = c1.text_input(
+                "測点名", value=row.get("name") or f"No.{idx + 1}", key=f"tou_name_{idx}"
+            )
+            row["reading"] = c2.number_input(
+                "貫天端 読値 (m)", value=row.get("reading"), step=0.001, format="%.3f", key=f"tou_reading_{idx}"
+            )
+            row["design"] = c3.number_input(
+                "設計 計画高 (m)", value=row.get("design"), step=0.001, format="%.3f", key=f"tou_design_{idx}"
+            )
+
+            reading, design = row["reading"], row["design"]
+            board_elev = (ih - reading) if (ih is not None and reading is not None) else None
+            target_reading = (ih - design) if (ih is not None and design is not None) else None
+            drop_mm = ((board_elev - design) * 1000) if (board_elev is not None and design is not None) else None
+
+            r1, r2, r3 = st.columns(3)
+            r1.metric("仮天端標高", fmt(board_elev) if board_elev is not None else "–")
+            r2.metric("読むべき値", fmt(target_reading) if target_reading is not None else "–")
+            r3.metric("下がり量", f"{fmt_signed(drop_mm, 0)} mm" if drop_mm is not None else "–")
+
+    if delete_idx is not None:
+        st.session_state.tou_rows.pop(delete_idx)
         st.rerun()
 
-    edited = st.data_editor(
-        st.session_state.tou_df,
-        num_rows="dynamic",
-        use_container_width=True,
-        column_config={
-            "測点名": st.column_config.TextColumn("測点名"),
-            "貫天端読値": st.column_config.NumberColumn("貫天端 読値 (m)", format="%.3f", step=0.001),
-            "設計計画高": st.column_config.NumberColumn("設計 計画高 (m)", format="%.3f", step=0.001),
-        },
-        key="tou_editor",
-    )
-    new_tou_df = edited[["測点名", "貫天端読値", "設計計画高"]].copy()
-    new_tou_df["貫天端読値"] = pd.to_numeric(new_tou_df["貫天端読値"], errors="coerce")
-    new_tou_df["設計計画高"] = pd.to_numeric(new_tou_df["設計計画高"], errors="coerce")
-    for i in new_tou_df.index:
-        name = new_tou_df.at[i, "測点名"]
-        if name is None or (isinstance(name, float) and pd.isna(name)) or str(name).strip() == "":
-            new_tou_df.at[i, "測点名"] = f"No.{i + 1}"
-    st.session_state.tou_df = new_tou_df
-
-    view = compute_tou(st.session_state.tou_df, ih)
-    display = view[["測点名", "貫天端読値", "仮天端標高", "設計計画高", "読むべき値", "下がり量(mm)"]].copy()
-    for col in ["貫天端読値", "仮天端標高", "設計計画高", "読むべき値"]:
-        display[col] = display[col].map(lambda v: fmt(v) if pd.notna(v) else "–")
-    display["下がり量(mm)"] = view["下がり量(mm)"].map(lambda v: fmt_signed(v, 0) if pd.notna(v) else "–")
-    st.dataframe(display, use_container_width=True, hide_index=True)
+    if st.button("＋ 測点を追加", key="tou_add_btn"):
+        n = len(st.session_state.tou_rows) + 1
+        st.session_state.tou_rows.append({"name": f"No.{n}", "reading": None, "design": None})
+        st.rerun()
 
     st.caption(
         "器械高 IH ＝ 基準点標高 ＋ 後視読値。各測点で仮天端を前視で読むと仮天端標高が求まり、"
@@ -139,22 +124,38 @@ def render_tou():
     )
 
     if st.button("サンプルを読込", key="tou_sample_btn"):
-        st.session_state.tou_df = tou_sample_df()
+        st.session_state.tou_rows = tou_sample_rows()
         st.rerun()
 
 
 # ============================================================
 # 雨水排水勾配
 # ============================================================
-def sui_sample_df():
+def sui_sample_rows():
+    return [
+        {"name": "No.1桝", "dist": None, "reading": 1.858, "invert": None, "drop": 20.0,
+         "pipe_type": "VU管", "nominal_size": 200, "outer_diameter": None},
+        {"name": "No.2桝", "dist": 6.0, "reading": 1.998, "invert": None, "drop": 20.0,
+         "pipe_type": "VU管", "nominal_size": 200, "outer_diameter": None},
+        {"name": "No.3桝", "dist": 8.0, "reading": None, "invert": 11.556, "drop": None,
+         "pipe_type": "VU管", "nominal_size": 200, "outer_diameter": None},
+    ]
+
+
+def sui_rows_to_df(rows):
     return pd.DataFrame(
         [
-            {"桝名": "No.1桝", "桝間距離(m)": None, "読値": 1.858, "IN(流入管底高)": None, "落差(mm)": 20.0,
-             "管種": "VU管", "呼び径(mm)": 200, "外径入力(mm)": None},
-            {"桝名": "No.2桝", "桝間距離(m)": 6.0, "読値": 1.998, "IN(流入管底高)": None, "落差(mm)": 20.0,
-             "管種": "VU管", "呼び径(mm)": 200, "外径入力(mm)": None},
-            {"桝名": "No.3桝", "桝間距離(m)": 8.0, "読値": None, "IN(流入管底高)": 11.556, "落差(mm)": None,
-             "管種": "VU管", "呼び径(mm)": 200, "外径入力(mm)": None},
+            {
+                "桝名": r.get("name"),
+                "桝間距離(m)": r.get("dist"),
+                "読値": r.get("reading"),
+                "IN(流入管底高)": r.get("invert"),
+                "落差(mm)": r.get("drop"),
+                "管種": r.get("pipe_type"),
+                "呼び径(mm)": r.get("nominal_size"),
+                "外径入力(mm)": r.get("outer_diameter"),
+            }
+            for r in rows
         ]
     )
 
@@ -241,46 +242,77 @@ def render_sui():
     st.caption("VU管・VP管の外径は一般的な参考値です(同呼び径では共通の外径として扱っています)。実際の外径は必ずメーカーカタログ・仕様書で確認してください。")
 
     st.subheader("② 桝リスト")
-    if "sui_df" not in st.session_state:
-        st.session_state.sui_df = sui_sample_df()
+    if "sui_rows" not in st.session_state:
+        st.session_state.sui_rows = sui_sample_rows()
 
-    input_cols = ["桝名", "桝間距離(m)", "読値", "IN(流入管底高)", "落差(mm)", "管種", "呼び径(mm)", "外径入力(mm)"]
+    pipe_options = ["VU管", "VP管", "その他"]
+    size_options = list(PVC_OUTER_DIAMETER.keys())
 
-    if st.button("＋ 桝を追加", key="sui_add_btn"):
-        n = len(st.session_state.sui_df) + 1
-        new_row = pd.DataFrame([{
-            "桝名": f"No.{n}桝", "桝間距離(m)": None, "読値": None, "IN(流入管底高)": None,
-            "落差(mm)": None, "管種": "VU管", "呼び径(mm)": None, "外径入力(mm)": None,
-        }])
-        st.session_state.sui_df = pd.concat([st.session_state.sui_df, new_row], ignore_index=True)
+    delete_idx = None
+    for idx, row in enumerate(st.session_state.sui_rows):
+        is_first = idx == 0
+        with st.container(border=True):
+            top1, top2 = st.columns([4, 1])
+            top1.markdown(f"**桝 {idx + 1}**" + ("(起点)" if is_first else ""))
+            if not is_first and top2.button("削除", key=f"sui_del_{idx}", use_container_width=True):
+                delete_idx = idx
+
+            c1, c2 = st.columns(2)
+            row["name"] = c1.text_input(
+                "桝名", value=row.get("name") or f"No.{idx + 1}桝", key=f"sui_name_{idx}"
+            )
+            if is_first:
+                row["dist"] = None
+                c2.text_input("桝間距離(m)", value="起点", disabled=True, key=f"sui_dist_disp_{idx}")
+            else:
+                row["dist"] = c2.number_input(
+                    "桝間距離(m)", value=row.get("dist"), step=0.1, format="%.1f", key=f"sui_dist_{idx}"
+                )
+
+            c3, c4, c5 = st.columns(3)
+            row["reading"] = c3.number_input(
+                "読値 (m)", value=row.get("reading"), step=0.001, format="%.3f", key=f"sui_reading_{idx}"
+            )
+            row["invert"] = c4.number_input(
+                "IN 流入管底高 (m)", value=row.get("invert"), step=0.001, format="%.3f", key=f"sui_invert_{idx}"
+            )
+            row["drop"] = c5.number_input(
+                "落差 (mm)", value=row.get("drop"), step=1.0, format="%.0f", key=f"sui_drop_{idx}"
+            )
+
+            c6, c7 = st.columns(2)
+            current_pipe = row.get("pipe_type") or "VU管"
+            row["pipe_type"] = c6.selectbox(
+                "管種", pipe_options,
+                index=pipe_options.index(current_pipe) if current_pipe in pipe_options else 0,
+                key=f"sui_pipe_{idx}",
+            )
+            if row["pipe_type"] in ("VU管", "VP管"):
+                current_size = row.get("nominal_size")
+                row["nominal_size"] = c7.selectbox(
+                    "呼び径(mm)", size_options,
+                    index=size_options.index(current_size) if current_size in size_options else 0,
+                    key=f"sui_size_{idx}",
+                )
+            else:
+                row["outer_diameter"] = c7.number_input(
+                    "外径入力 (mm)", value=row.get("outer_diameter"), step=1.0, format="%.0f", key=f"sui_od_{idx}"
+                )
+
+    if delete_idx is not None:
+        st.session_state.sui_rows.pop(delete_idx)
         st.rerun()
 
-    edited = st.data_editor(
-        st.session_state.sui_df[input_cols],
-        num_rows="dynamic",
-        use_container_width=True,
-        column_config={
-            "桝名": st.column_config.TextColumn("桝名"),
-            "桝間距離(m)": st.column_config.NumberColumn("桝間距離(m)", format="%.1f", step=0.1),
-            "読値": st.column_config.NumberColumn("読値 (m)", format="%.3f", step=0.001),
-            "IN(流入管底高)": st.column_config.NumberColumn("IN 流入管底高 (m)", format="%.3f", step=0.001),
-            "落差(mm)": st.column_config.NumberColumn("落差 (mm)", format="%.0f", step=1.0),
-            "管種": st.column_config.SelectboxColumn("管種", options=["VU管", "VP管", "その他"]),
-            "呼び径(mm)": st.column_config.SelectboxColumn("呼び径(mm)", options=list(PVC_OUTER_DIAMETER.keys())),
-            "外径入力(mm)": st.column_config.NumberColumn("外径入力(mm・その他管種用)", format="%.0f", step=1.0),
-        },
-        key="sui_editor",
-    )
-    new_sui_df = edited[input_cols].copy()
-    for col in ["桝間距離(m)", "読値", "IN(流入管底高)", "落差(mm)", "外径入力(mm)"]:
-        new_sui_df[col] = pd.to_numeric(new_sui_df[col], errors="coerce")
-    for i in new_sui_df.index:
-        name = new_sui_df.at[i, "桝名"]
-        if name is None or (isinstance(name, float) and pd.isna(name)) or str(name).strip() == "":
-            new_sui_df.at[i, "桝名"] = f"No.{i + 1}桝"
-    st.session_state.sui_df = new_sui_df
+    if st.button("＋ 桝を追加", key="sui_add_btn"):
+        n = len(st.session_state.sui_rows) + 1
+        st.session_state.sui_rows.append({
+            "name": f"No.{n}桝", "dist": None, "reading": None, "invert": None,
+            "drop": None, "pipe_type": "VU管", "nominal_size": None, "outer_diameter": None,
+        })
+        st.rerun()
 
-    calc = compute_sui(st.session_state.sui_df, ih, unit_key)
+    sui_df = sui_rows_to_df(st.session_state.sui_rows)
+    calc = compute_sui(sui_df, ih, unit_key)
 
     display_cols = ["桝名", "桝間距離(m)", "読値", "IN(流入管底高)", "落差(mm)", "OUT"]
     if show_crown:
@@ -322,7 +354,7 @@ def render_sui():
     )
 
     if interval is not None and interval > 0:
-        rows_data = st.session_state.sui_df.reset_index(drop=True)
+        rows_data = sui_df.reset_index(drop=True)
         any_shown = False
         for i in range(1, len(calc)):
             per_m = calc["区間perM"].iloc[i]
@@ -367,7 +399,7 @@ def render_sui():
     )
 
     if st.button("サンプルを読込", key="sui_sample_btn"):
-        st.session_state.sui_df = sui_sample_df()
+        st.session_state.sui_rows = sui_sample_rows()
         st.rerun()
 
 
