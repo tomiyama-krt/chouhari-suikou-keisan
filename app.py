@@ -81,13 +81,18 @@ def render_tou():
     st.subheader("① 器械高の設定")
     c1, c2, c3 = st.columns(3)
     bm_name = c1.text_input("基準点名", value=st.session_state.get("tou_bm_name", "BM-1"), key="tou_bm_name")
-    bm_elev = c2.text_input("基準点 既知標高 (m)", value=st.session_state.get("tou_bm_elev", "12.500"), key="tou_bm_elev")
-    bs = c3.text_input("後視 読値 BS (m)", value=st.session_state.get("tou_bs", "1.234"), key="tou_bs")
+    bm_elev = c2.number_input(
+        "基準点 既知標高 (m)", value=st.session_state.get("tou_bm_elev", 12.500),
+        step=0.001, format="%.3f", key="tou_bm_elev",
+    )
+    bs = c3.number_input(
+        "後視 読値 BS (m)", value=st.session_state.get("tou_bs", 1.234),
+        step=0.001, format="%.3f", key="tou_bs",
+    )
 
     ih = None
-    bm_elev_n, bs_n = num(bm_elev), num(bs)
-    if bm_elev_n is not None and bs_n is not None:
-        ih = bm_elev_n + bs_n
+    if bm_elev is not None and bs is not None:
+        ih = bm_elev + bs
     st.metric("器械高 IH", fmt(ih) if ih is not None else "–")
 
     st.subheader("② 測点 (貫板の下がり量)")
@@ -203,13 +208,18 @@ def render_sui():
     st.subheader("① 器械高・単位の設定")
     c1, c2, c3 = st.columns(3)
     bm_name = c1.text_input("基準点名", value=st.session_state.get("sui_bm_name", "BM-1"), key="sui_bm_name")
-    bm_elev = c2.text_input("基準点 既知標高 (m)", value=st.session_state.get("sui_bm_elev", "12.500"), key="sui_bm_elev")
-    bs = c3.text_input("後視 読値 BS (m)", value=st.session_state.get("sui_bs", "1.234"), key="sui_bs")
+    bm_elev = c2.number_input(
+        "基準点 既知標高 (m)", value=st.session_state.get("sui_bm_elev", 12.500),
+        step=0.001, format="%.3f", key="sui_bm_elev",
+    )
+    bs = c3.number_input(
+        "後視 読値 BS (m)", value=st.session_state.get("sui_bs", 1.234),
+        step=0.001, format="%.3f", key="sui_bs",
+    )
 
     ih = None
-    bm_elev_n, bs_n = num(bm_elev), num(bs)
-    if bm_elev_n is not None and bs_n is not None:
-        ih = bm_elev_n + bs_n
+    if bm_elev is not None and bs is not None:
+        ih = bm_elev + bs
     st.metric("器械高 IH", fmt(ih) if ih is not None else "–")
 
     unit = st.radio("勾配の単位", ["%", "分数 1/n"], horizontal=True, key="sui_unit")
@@ -284,7 +294,10 @@ def render_sui():
         m3.metric("平均勾配", "–")
 
     st.subheader("③ 区間内の中間管底高")
-    interval = num(st.text_input("表示間隔 (m)", value=st.session_state.get("sui_interval", "2"), key="sui_interval"))
+    interval = st.number_input(
+        "表示間隔 (m)", value=st.session_state.get("sui_interval", 2.0),
+        step=0.1, format="%.1f", min_value=0.1, key="sui_interval",
+    )
 
     if interval is not None and interval > 0:
         rows_data = st.session_state.sui_df.reset_index(drop=True)
